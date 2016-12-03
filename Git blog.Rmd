@@ -1,0 +1,212 @@
+---
+title: "ASX200 Review Blog"
+author: "Yang Li"
+date: "03/12/2016"
+output: html_document
+---
+The S&P/ASX 200 index is a market-capitalization weighted and float-adjusted stock market index of Australian stocks listed on the Australian Securities Exchange from Standard & Poor's. ASX200 index is usually used as the benchmark when calculating beta or other indicators for an individual stock traded in Australia. However, in most of the univeristies in Australia, ASX200 is not carefully scrutinized by people. This causes our understanding towards financial markets, especially equity market to be limited. More importantly, finance is more about doing than just preaching. Therefore, I write this blog to show the fundamentals of doing things in finance. Now, let's get our hands dirty!!!
+
+The first thing I am going to do is that I want to get all the company names in ASX200. Literally, ASX200 has 200 companies, usually large caps. From Wikipedia,we can get the list of campany names in ASX200. The URL is provided below:
+URL:https://en.wikipedia.org/wiki/S%26P/ASX_200
+
+Now, we can do a bit web-scrapping. We use read_html() to collect the HTML from Wikipedia. Then, we parse the HTML to a data frame using html_node() and html_table().
+
+```{r message=FALSE, warning=FALSE}
+library(rvest)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(quantmod)
+library(plotly)
+library(stringr)
+library(tidyr)
+asx_200=read_html('https://en.wikipedia.org/wiki/S%26P/ASX_200')
+asx.table = asx_200 %>%
+  html_nodes("table") %>%
+  .[[1]] %>%
+  html_table() %>%
+  tbl_df()
+asx.table
+```
+  
+It is still bit unclear of what's going on in ASX200. Now, we do a barplot to visualize the constituents of ASX200
+```{r}
+try = asx.table %>%
+  group_by(Sector) %>%
+  summarise(n())
+
+ggplot(aes(x = Sector,
+           y = `n()`,fill=Sector),
+           data = try)  + 
+  geom_bar(stat = "identity")+
+  geom_text(aes(label=`n()`),size = 3, nudge_y = 2, nudge_x = .1)+ 
+  ylab("Count")+theme(legend.position="none")+ggtitle("Number of Companies in Each Sector of ASX200")+
+  coord_flip() 
+```
+
+Now, you see, 3 sectors,namely, Financials, Materials and Consumer Discretionary, dominate ASX200. 52 companies in Financial sector, 31 in Consumer Discretionary Sector and 29 in Material sector are included in ASX200. 
+
+Afther the first step, we can further examine the returns, risks(measured by standard deviation) between two different sectors. Meanwhile, the information of a particular company can also be researched. 
+
+Let us look the performance of each during last year
+```{r warning=FALSE}
+indicator = paste(asx.table$Symbol,"AX",sep=".")#Getting the name of each sector
+###Getting the stock return in one spcific sector: From , from = "2015-01-01", to = "2016-10-23"
+stock.ax = function(ticker) {
+  temp=tryCatch(getSymbols(Symbols =ticker, from = "2015-01-01", to = "2016-10-23",auto.assign = F),
+                warning=function(w) {print(paste('sth','wrong',sep=" "))},
+                error=function(e){print("Not Fund")})
+  if(temp[1]=="sth wrong") {
+    assign(as.character(ticker),c("Empty Indicator"), envir = globalenv())
+  } else
+  {assign(as.character(ticker),dailyReturn(Ad(temp),type = "log"), envir = globalenv())
+  }}
+
+###getting return data for each company
+###Due to the reason that Yahoo finance does not provide complete dataset for all 200 company,we have to kick out companies that could not be assessed from Yahoo Finance
+return.data=lapply(indicator,stock.ax)
+return.data.2 = do.call(cbind,return.data[-c(37,113,189)])
+```
+
+Having organised the daily return data, we could dig a bit deeper in this return dataset. we particular want to know which sector putperformed in the past year and the correlations among each sector. Therefore, the following figures show the performance of each sector and correlations among them. 
+
+
+```{r message=FALSE, warning=FALSE}
+sector.average = function(ticker) {
+  selector = paste((asx.table[-c(37,113,189),] %>%
+                      filter(Sector==ticker) %>%
+                      select(Symbol))$Symbol, "AX",sep=".")
+  
+  aver = return.data.2 %>%
+    tbl_df() %>%
+    select(one_of(selector)) %>%
+    apply(2,mean,na.rm=T) %>%
+    mean()
+  return(aver*252*100)
+}
+
+sector.name=(asx.table %>%
+  select(Sector) %>%
+  unique())$Sector
+temp = sapply(sector.name[1:length(sector.name)],sector.average)
+specify_decimal <- function(x, k) format(round(x, k), nsmall=k)
+ggplot(aes(x = sector.name,
+           y = temp,fill=sector.name),
+       data = data.frame(sector.name,specify_decimal(temp,2)))  + 
+  geom_bar(stat = "identity")+
+  geom_text(aes(label=specify_decimal(temp,2)),size = 4, nudge_y = 2.5, nudge_x = 0)+ 
+  ylab("Percentage Change")+theme(legend.position="none")+ggtitle("Performance of Each Sector in ASX200")+
+  coord_flip() 
+```
+
+It seems that Real Estate Sector did a good job last year. Now, let's look at the correlations among sectors
+
+```{r message=FALSE, warning=FALSE}
+sector.cor = function(ticker) {
+  selector = paste((asx.table[-c(37,113,189),] %>%
+                      filter(Sector==ticker) %>%
+                      select(Symbol))$Symbol, "AX",sep=".")
+  
+  aver = return.data.2 %>%
+    tbl_df() %>%
+    select(one_of(selector)) %>%
+    apply(1,mean,na.rm=T)
+  return(aver)
+}
+temp = lapply(sector.name[1:length(sector.name)],sector.cor)
+temp.2=do.call(cbind,temp)
+colnames(temp.2)=sector.name
+q=qplot(x=Var1, y=Var2, data=melt(cor(temp.2)), fill=value, geom="tile")
+q+theme(axis.text.x = element_text(angle = 90, hjust = 1))+theme(axis.text.x = element_text(angle = 90, hjust = 1))+xlab(" ")+ylab(" ")+ggtitle("Correlation Heapmap of Each Sector in ASX200")
+```
+
+After examing each sector of ASX200, we have got a preliminary understanding of this index. We have known the overall performance and correlations among each sector. However, it still seems not enough for us. We actually want to some technical indicators and we each want to do some forecast for forture performance.
+```{r message=FALSE, warning=FALSE}
+getSymbols("^AXJO", from = "2007-01-01", to = "2016-10-23")
+AXJO %>%
+    chartSeries(TA='addBBands();
+                    addBBands(draw="p");
+                    addMACD()', 
+                subset='2016',
+                theme="white"
+                ) 
+
+```
+
+In my furture blogs, I am going to deeply discuss these technical indicators. Now, we just have to look at the deployment of some technical indicators.
+
+we can appy the log-transformation. Then, we can see that the daily returns are approximately normally distributed:
+
+```{r message=FALSE, warning=FALSE}
+AXJO_returns <- AXJO %>%
+    Ad() %>%
+    dailyReturn(type = "log")
+names(AXJO_returns) <- "AXJO.Returns"
+
+AXJO_returns %>%    
+    ggplot(aes(x =AXJO.Returns)) + 
+    geom_histogram(bins = 100) + 
+    geom_density() +
+    geom_rug(alpha = 0.5) + ggtitle("ASX200 Log-Return Histogram")
+```
+
+Forrest Gump once said: "Mama always said life was like a box of chocolates. You never know what you're gonna get". In financial markets, this is ture as well. We do not have the crystal ball to predict what will definitely happen in the future. However, we can guess what will happen. Monte-Carlo simulation does this guessing job perfectly. As we have seen before, the return of ASX200 is approximatelly normally distributed. Therefore, we can repeatedly perform random walk simulation process thousands of times. Now, we will do the 250 Monte Carlo simulations (M = 250) for one year of trading days simulations (N = 252)
+```{r message=FALSE, warning=FALSE}
+N  = 252 
+M  = 250
+mu    = mean(AXJO_returns,na.rm=T)
+sigma = sd(AXJO_returns,na.rm=T)
+
+day = c(1:252)
+price_start <- AXJO$AXJO.Close[[nrow(AXJO$AXJO.Close)]]
+
+# Simulate ASX200 Index
+set.seed(123)
+monte.matrix = matrix(nrow = N, ncol = M)
+for (j in 1:M) {
+    monte.matrix[[1, j]] = price_start
+    for(i in 2:N) {
+        monte.matrix[[i, j]] = monte.matrix[[i - 1, j]] * exp(rnorm(1, mu, sigma))
+    }
+}
+
+price_sim <- cbind(day, monte.matrix) %>%
+  tbl_df()
+
+xyz <- str_c("Sim.", seq(1, M))
+xyz <- c("Day", xyz)
+names(price_sim) <- xyz
+price_sim <- price_sim %>%
+    gather(key = "Simulation", value = "Value", -(Day))
+
+price_sim %>%
+    ggplot(aes(x = Day, y = Value, Group = Simulation)) + 
+    geom_line(alpha = 0.15,color="orange") +
+    ggtitle(str_c("AXJO: ", M, 
+                  " Monte Carlo Simulations for ASX200 Over ", N, 
+                  " Trading Days"))+theme_bw()
+```
+
+Based on the result of Monte-Carlo simulation, we can calculate the relevant confidence intevals. This will be covered in my future blogs.
+
+Hope you can enjoy this blog.....
+
+Cheers and have a sweet dream.....
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
